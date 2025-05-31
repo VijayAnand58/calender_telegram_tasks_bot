@@ -2,7 +2,7 @@
 anon.session
 anon.session-journal
 data.pkl
-important_user.pkl
+important_users.pkl
 credentials.json
 token.json
 __pycache__/
