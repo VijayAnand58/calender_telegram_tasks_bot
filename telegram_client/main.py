@@ -13,13 +13,15 @@ from telethon import TelegramClient,events
 from telethon.tl.types import User
 
 from datetime import datetime
-
+import asyncio
 import pickle
 client = TelegramClient('anon', api_id, api_hash)
 
 import threading
 data_lock=threading.Lock()
-
+visited_id_lock=threading.Lock()
+#async lock
+important_usernames_lock=asyncio.Lock()
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from chatbot.msg_analyzer import google_task_handler
@@ -44,19 +46,21 @@ async def admin_handler(event):
 
     if command == "/add_important":
         if argument:
-            important_usernames.add(argument.lstrip('@').lower())
-            with open("important_users.pkl","+bw") as f:
-                pickle.dump(important_usernames,f)
-            await event.respond(f"Added @{argument} to important users.")
+            async with important_usernames_lock:
+                important_usernames.add(argument.lstrip('@').lower())
+                with open("important_users.pkl","+bw") as f:
+                    pickle.dump(important_usernames,f)
+                await event.respond(f"Added {argument} to important users.")
         else:
             await event.respond("Please specify a username.")
 
     elif command == "/remove_important":
         if argument:
-            important_usernames.discard(argument.lstrip('@').lower())
-            with open("important_users.pkl","+bw") as f:
-                pickle.dump(important_usernames,f)
-            await event.respond(f"Removed @{argument} from important users.")
+            async with important_usernames_lock:
+                important_usernames.discard(argument.lstrip('@').lower())
+                with open("important_users.pkl","+bw") as f:
+                    pickle.dump(important_usernames,f)
+                await event.respond(f"Removed @{argument} from important users.")
         else:
             await event.respond("Please specify a username.")
 
@@ -84,14 +88,17 @@ async def handle_message(event)->None:
 
     if isinstance(sender,User) and not sender.bot and event.is_private:
         # check whether the user is important or not
-        is_important:bool= (sender_username in important_usernames)
-
-        already_visited=visited_id.get(sender_id,None)
-        if not already_visited:
-            visited_id[sender_id]=datetime.now()
+        async with important_usernames_lock:
+            is_important:bool= (sender_username in important_usernames)
+        # threading lock set
+        with visited_id_lock:
+            already_visited=visited_id.get(sender_id,None)
+            if not already_visited:
+                visited_id[sender_id]=datetime.now()
 
         if is_important:
             msg:str=event.raw_text.strip()
+            if not msg: return
             parts=msg.split(maxsplit=1)
 
             #parse message parts
@@ -112,7 +119,7 @@ async def handle_message(event)->None:
                     with data_lock:
                         with open("data.pkl", "rb") as f:
                             temp_list_events= pickle.load(f)
-                            print(temp_list_events)
+                            # print(temp_list_events)
                             if temp_list_events != "Error":
                                 for temps in temp_list_events:
                                     temp_start_time=datetime.strptime(temps["start"],"%H:%M:%S")
@@ -157,9 +164,13 @@ async def start_telethon():
     await client.run_until_disconnected()
 
 def check_users_10_mins():
-    if len(visited_id)<=0: return
+    with visited_id_lock:
+        if len(visited_id)<=0: return
+        time_now_check=datetime.now()
+        ids_to_remove=[]
+        for visitor_id_instance, time_int in visited_id.items():
+            if ((time_now_check-time_int).total_seconds() / 60) >= 10:
+                ids_to_remove.append(visitor_id_instance)
 
-    time_now_check=datetime.now()
-    for visitor_id_instance, time_int in visited_id.items():
-        if ((time_now_check-time_int).total_seconds() / 60) >= 10:
-            del visited_id[visitor_id_instance] 
+        for visitor_id_instance_remove in ids_to_remove:
+            del visited_id[visitor_id_instance_remove] 
